@@ -47,7 +47,7 @@ pip3 install scapy
 
 Run the toolkit with root privileges:
 
-sudo python3 netwatch.py
+sudo python3 netwatchV2.py
 
 Some modules like ARP Spoofing and Deauth require sudo and compatible network interfaces (e.g., monitor mode enabled).
 
