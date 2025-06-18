@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 NetWatch Toolkit v2
-Author: Niko DeRuise
+Author: wickedNull
 
 USAGE:
 sudo python3 netwatchV2.py
