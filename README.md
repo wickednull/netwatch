@@ -3,7 +3,7 @@ Offensive and diagnostic toolkit with ARP scanning, spoofing, port scanning, sni
 
 # NetWatch Toolkit v2
 
-**Author:** Niko DeRuise  
+**Author:** wickedNull  
 **Version:** 2.0  
 **License:** For Educational Use Only
 
