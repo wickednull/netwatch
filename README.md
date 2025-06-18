@@ -2,6 +2,7 @@
 Offensive and diagnostic toolkit with ARP scanning, spoofing, port scanning, sniffing, traceroute, reverse shell, and an Evil Portal phishing server — all packed into a single cyberpunk-themed Python GUI.
 
 # NetWatch Toolkit v2
+# NetWatch Dev
 
 **Author:** wickedNull  
 **Version:** 2.0  
@@ -48,6 +49,12 @@ pip3 install scapy
 Run the toolkit with root privileges:
 
 sudo python3 netwatchV2.py
+
+or to run recent dev. releases
+
+Run thetoolkit with root privileges :
+
+sudo python3 netwatch.py
 
 Some modules like ARP Spoofing and Deauth require sudo and compatible network interfaces (e.g., monitor mode enabled).
 
