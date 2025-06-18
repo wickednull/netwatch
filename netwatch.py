@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NetWatch Toolkit v2 (Final Patched)
+NetWatch Toolkit v2 (2.1)
 Author: Niko DeRuise
 
 USAGE:
