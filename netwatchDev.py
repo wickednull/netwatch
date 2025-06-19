@@ -4,7 +4,7 @@ NetWatch Toolkit v2  (2.3)
 Author: wickedNull aka Null_Lyfe
 
 USAGE:
-    sudo python3 netwatch.py
+    sudo python3 netwatchDev.py
 
 REQUIREMENTS:
     - Python 3.x
