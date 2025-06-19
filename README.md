@@ -54,7 +54,7 @@ or to run recent dev. releases
 
 Run thetoolkit with root privileges :
 
-sudo python3 netwatch.py
+sudo python3 netwatchDev.py
 
 Some modules like ARP Spoofing and Deauth require sudo and compatible network interfaces (e.g., monitor mode enabled).
 
