@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 NetWatch Toolkit v2  (2.3)
-Author: wickedNull aka Null_Lyfe_tcl
+Author: wickedNull aka Null_Lyfe
 
 USAGE:
     sudo python3 netwatch.py
