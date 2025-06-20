@@ -1,6 +1,6 @@
 # NetWatch Toolkit v2.3
 
-**Author:** wickedNull aka Null_Lyfe 
+**Author:** wickedNull
 **License:** For educational and authorized use only  
 **Platform:** Linux (requires root)
 
