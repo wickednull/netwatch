@@ -4,7 +4,7 @@ NetWatch Toolkit v2.3
 Author: Niko DeRuise
 
 USAGE:
-    sudo python3 netwatch.py
+    sudo python3 netwatchDev.py
 """
 
 import os
