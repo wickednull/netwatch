@@ -64,12 +64,11 @@
 - `scapy`, `tkinter`, `nmap`
 - Tools: `hostapd`, `dnsmasq`, `netcat`, `tcpdump`, `iftop`, `whois`, `geoip-bin`, `metasploit-framework`, `searchsploit`
 
-Install missing tools via:
-
+Install missing tools 
 ```bash
 sudo apt install nmap netcat dnsmasq hostapd tcpdump iftop whois geoip-bin metasploit-framework exploitdb
 pip3 install scapy
-
+```
 ⸻
 
 🧪 Usage
